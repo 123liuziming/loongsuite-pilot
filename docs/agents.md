@@ -298,6 +298,10 @@ and `OPENCLAW_STATE_DIR`. For hosts supporting conversation access, the entry is
 }
 ```
 
+Pilot assigns a distinct `gen_ai.turn.id` to each observed OpenClaw run, including
+when the host reuses a native run ID. Events and spans retain the native ID as
+`agent.openclaw.run_id`; session IDs are unchanged.
+
 The legacy adapter uses `llm_input`, assistant `before_message_write`, tool hooks,
 and `llm_output` to preserve observed output, tool IDs and per-call token usage.
 Run aggregate usage is diagnostic-only, never added to model usage. LLM start

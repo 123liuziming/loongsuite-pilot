@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { boundedMessageFingerprint } from "./legacy-utils.mjs";
 
 /** OpenClaw 2026.3.8 contract:
@@ -109,14 +108,9 @@ export function createLegacyHandlers(shared) {
       }
       // sessionId belongs to the event in 3.8; the general context may omit it.
       const fullCtx = { ...ctx, runId: event.runId, sessionId: event.sessionId || ctx?.sessionId };
-      const previous = shared.resolveContextRun(event, fullCtx);
-      if (previous?.completed) {
-        // A provider fallback may reuse the native runId after its failed
-        // attempt was already flushed. Give the new attempt its own trace and
-        // turn identity, while retaining the native run ID for correlation.
-        previous.traceId = crypto.randomBytes(16).toString("hex");
-        previous.turnId = `${event.runId}:legacy:${crypto.randomUUID()}`;
-      }
+      // A fallback or a later invocation can reuse the native ID after the
+      // previous attempt was flushed. Start with fresh state in either case.
+      shared.startRun(event.runId, event, fullCtx);
       shared.handleLlmInput(event, fullCtx, userId, emit, cfg);
       const run = shared.resolveContextRun(event, fullCtx);
       const key = ctx?.sessionKey || event.sessionKey;

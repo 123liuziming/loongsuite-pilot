@@ -249,6 +249,9 @@ PATH/工作目录，不执行 CLI，也不使用用户传入的版本；明确�
 }
 ```
 
+Pilot 为每次观察到的 OpenClaw 运行分配独立的 `gen_ai.turn.id`，包括宿主复用原生
+run ID 的情况；事件和 Span 通过 `agent.openclaw.run_id` 保留原生 ID，session ID 不变。
+
 Legacy 适配器以 `llm_input`、AssistantMessage 的 `before_message_write`、
 工具 Hook 和 `llm_output` 重建链路，保留真实输出、toolCallId 与逐次 Token。
 run 汇总用量只作诊断，不叠加到 LLM 用量。模型请求开始时间按输入或最后一个工具结果

@@ -164,7 +164,8 @@ describe('OpenClaw 3.8 legacy adapter', () => {
     fire('before_message_write', { message: message('r1') });
     finish();
     const responses = records().filter(r => r['event.name'] === 'llm.response');
-    expect(responses.map(r => r['gen_ai.turn.id'])).toEqual(['run-2', 'run-1']);
+    expect(responses.map(r => r['agent.openclaw.run_id'])).toEqual(['run-2', 'run-1']);
+    expect(new Set(responses.map(r => r['gen_ai.turn.id'])).size).toBe(2);
     expect(new Set(responses.map(r => r.trace_id)).size).toBe(2);
   });
 
@@ -246,7 +247,7 @@ describe('OpenClaw 3.8 legacy adapter', () => {
     }
     fire('before_message_write', { message: message('held') }); finish('held');
     expect(records().filter(r => r['event.name'] === 'llm.response')).toHaveLength(1);
-    expect(records().find(r => r['event.name'] === 'llm.response')['gen_ai.turn.id']).toBe('held');
+    expect(records().find(r => r['event.name'] === 'llm.response')['agent.openclaw.run_id']).toBe('held');
   });
 
   it('emits bounded incomplete terminals when every cached run is active', () => {

@@ -11,7 +11,7 @@
  *   - each AssistantMessage contributes its own usage/output/finish reason
  *   - llm_output remains a run-level terminal checksum, not an LLM response
  *   - tool calls inherit the current ReAct step.id (most recent callId)
- *   - turn.id (runId) and trace_id stay stable across all events in a run
+ *   - turn.id and trace_id stay stable across all events in a run
  *
  * Fixture source: issue AGE-1304 attachments from researcher CP1 probe.
  */
@@ -633,13 +633,13 @@ describe('OpenClaw plugin stateful pipeline', () => {
     const envelopes = readJsonl('pilot-probe-events-cp2.jsonl');
     const records = await replay(plugin, envelopes);
     const runId = 'e50412fd-1df2-48a1-9dee-552db05e140e';
-    const runRecords = records.filter((r) => r['gen_ai.turn.id'] === runId);
+    const runRecords = records.filter((r) => r['agent.openclaw.run_id'] === runId);
     expect(runRecords.length).toBeGreaterThan(5);
     const traceIds = new Set(runRecords.map((r) => r.trace_id));
     expect(traceIds.size).toBe(1);
     const turnIds = new Set(runRecords.map((r) => r['gen_ai.turn.id']));
     expect(turnIds.size).toBe(1);
-    expect(turnIds.has(runId)).toBe(true);
+    expect([...turnIds][0]).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('assigns tool calls to the current ReAct step.id (= most recent callId)', async () => {
@@ -1241,10 +1241,11 @@ describe('OpenClaw plugin stateful pipeline', () => {
     }
     const records = readOutputRecords().filter((r) => r['agent.openclaw.hook'] === 'before_message_write');
     expect(records).toHaveLength(2);
-    expect(records.find((r) => r['gen_ai.turn.id'] === 'run-a')['gen_ai.output.messages'][0].parts[0].content).toBe('answer-a');
-    expect(records.find((r) => r['gen_ai.turn.id'] === 'run-b')['gen_ai.output.messages'][0].parts[0].content).toBe('answer-b');
-    expect(records.find((r) => r['gen_ai.turn.id'] === 'run-a')['gen_ai.response.time_to_first_token']).toBeUndefined();
-    expect(records.find((r) => r['gen_ai.turn.id'] === 'run-b')['gen_ai.response.time_to_first_token']).toBeUndefined();
+    expect(records.find((r) => r['agent.openclaw.run_id'] === 'run-a')['gen_ai.output.messages'][0].parts[0].content).toBe('answer-a');
+    expect(records.find((r) => r['agent.openclaw.run_id'] === 'run-b')['gen_ai.output.messages'][0].parts[0].content).toBe('answer-b');
+    expect(records.find((r) => r['agent.openclaw.run_id'] === 'run-a')['gen_ai.response.time_to_first_token']).toBeUndefined();
+    expect(records.find((r) => r['agent.openclaw.run_id'] === 'run-b')['gen_ai.response.time_to_first_token']).toBeUndefined();
+    expect(new Set(records.map(r => r['gen_ai.turn.id'])).size).toBe(2);
   });
 
   it.each(['default', 'custom-path', 'bom'])('redacts content before persistence with %s config while retaining token usage', async (kind) => {
@@ -1436,7 +1437,7 @@ describe('OpenClaw plugin stateful pipeline', () => {
     }
     const responses = readOutputRecords().filter(r => r['event.name'] === 'llm.response');
     expect(responses).toHaveLength(1);
-    expect(responses[0]).toMatchObject({ 'gen_ai.turn.id': ctx.runId, 'gen_ai.usage.input_tokens': 3 });
+    expect(responses[0]).toMatchObject({ 'agent.openclaw.run_id': ctx.runId, 'gen_ai.usage.input_tokens': 3 });
     expect(responses[0]['gen_ai.response.time_to_first_token']).toBeUndefined();
   });
 
@@ -1604,7 +1605,8 @@ describe('subagent trace propagation', () => {
     observer.complete(receipt, { delivered: true, path: 'steered', deliveredAt: Date.now() });
     const results = readOutputRecords().filter(r => r['event.name'] === 'gen_ai.agent.result');
     expect(results).toHaveLength(1);
-    expect(results[0]['gen_ai.turn.id']).toBe(parent.runId);
+    expect(results[0]['agent.openclaw.run_id']).toBe(parent.runId);
+    expect(results[0]['gen_ai.turn.id']).toBe(readOutputRecords().find(r => r['agent.openclaw.run_id'] === parent.runId)['gen_ai.turn.id']);
     expect(results[0]['gen_ai.agent.peer.id']).toBe(child.sessionId);
     expect(results[0]['gen_ai.output.messages'][0].parts[0].content).toBe('actual reply');
     await h.llm_output({}, parent);
@@ -1658,16 +1660,17 @@ describe('subagent trace propagation', () => {
     expect(results).toHaveLength(2);
     expect(results.map(row => row['gen_ai.agent.invocation.id'])).toEqual(invokes.toReversed().map(row => row['gen_ai.agent.invocation.id']));
     expect(results[0]['gen_ai.agent.parent.invocation.id']).toBe(invokes[0]['gen_ai.agent.invocation.id']);
-    expect(results[0]['gen_ai.turn.id']).toBe(resumed.runId);
-    expect(results[1]['gen_ai.turn.id']).toBe(receiver.runId);
-    const continuation = rows.filter(row => row['gen_ai.turn.id'] === resumed.runId);
+    expect(results[0]['agent.openclaw.run_id']).toBe(resumed.runId);
+    expect(results[1]['agent.openclaw.run_id']).toBe(receiver.runId);
+    const continuation = rows.filter(row => row['agent.openclaw.run_id'] === resumed.runId);
+    expect(continuation.every(row => row['gen_ai.turn.id'] === results[0]['gen_ai.turn.id'])).toBe(true);
     expect(continuation.every(row => row['gen_ai.agent.parent.invocation.id'] === invokes[0]['gen_ai.agent.invocation.id'])).toBe(true);
     const outerTool = rows.find(row => row['event.name'] === 'tool.call' && row['gen_ai.tool.call.id'] === 'outer');
     expect(continuation.every(row => row.parent_span_id === outerTool.span_id)).toBe(true);
     vi.useFakeTimers();
     await h.before_agent_run({ prompt: 'independent work' }, { ...child, runId: 'autonomous-work' });
     await vi.advanceTimersByTimeAsync(30_001);
-    expect(readOutputRecords().find(row => row['gen_ai.turn.id'] === 'autonomous-work')['gen_ai.agent.parent.invocation.id']).toBeUndefined();
+    expect(readOutputRecords().find(row => row['agent.openclaw.run_id'] === 'autonomous-work')['gen_ai.agent.parent.invocation.id']).toBeUndefined();
   });
 
   it('retains one producer-owned start across collector restart and repeated native setup hooks', async () => {
@@ -1736,7 +1739,8 @@ describe('subagent trace propagation', () => {
     await restarted.before_message_write(delivery, receiver);
     const results = readOutputRecords().filter(r => r['event.name'] === 'gen_ai.agent.result');
     expect(results).toHaveLength(1);
-    expect(results[0]['gen_ai.turn.id']).toBe(receiver.runId);
+    expect(results[0]['agent.openclaw.run_id']).toBe(receiver.runId);
+    expect(results[0]['gen_ai.turn.id']).toBe(readOutputRecords().find(r => r['agent.openclaw.run_id'] === receiver.runId)['gen_ai.turn.id']);
     expect(results[0]['gen_ai.agent.invocation.id']).toBe(invoke['gen_ai.agent.invocation.id']);
     expect(results[0]['gen_ai.agent.peer.id']).toBe(child.sessionId);
     expect(results[0].span_id).toBeUndefined();
@@ -1767,7 +1771,8 @@ describe('subagent trace propagation', () => {
     expect(results).toHaveLength(2);
     expect(results.map(r => r['gen_ai.agent.invocation.id'])).toEqual(invokes.map(r => r['gen_ai.agent.invocation.id']));
     expect(results.every(r => !('gen_ai.output.messages' in r) && !('error.type' in r))).toBe(true);
-    expect(results.every(r => r['gen_ai.turn.id'] === parent.runId && !r.span_id)).toBe(true);
+    expect(results.every(r => r['agent.openclaw.run_id'] === parent.runId && !r.span_id)).toBe(true);
+    expect(new Set(results.map(r => r['gen_ai.turn.id'])).size).toBe(1);
   });
 
   it('keeps new send work separate and refuses ambiguous or user-authored completion text', async () => {
@@ -1799,7 +1804,7 @@ describe('subagent trace propagation', () => {
     }
     const delivered = readOutputRecords().filter(r => r['event.name'] === 'gen_ai.agent.result');
     expect(delivered.map(r => r['gen_ai.agent.invocation.id'])).toEqual(invokes.toReversed().map(r => r['gen_ai.agent.invocation.id']));
-    expect(delivered[0]['gen_ai.turn.id']).toBe(`announce:v1:${childKey}:child-work-2`);
+    expect(delivered[0]['agent.openclaw.run_id']).toBe(`announce:v1:${childKey}:child-work-2`);
     vi.useFakeTimers();
     for (const index of [1, 2]) {
       await restarted.before_agent_run({ prompt: 'continue' }, { runId: `child-work-${index}`, sessionId: 'same-child', sessionKey: childKey });
@@ -1844,8 +1849,9 @@ describe('subagent trace propagation', () => {
     await handlers.llm_output({}, child);
     const records = readOutputRecords();
     const spawn = records.find(r => r['event.name'] === 'tool.call');
-    const children = records.filter(r => r['gen_ai.turn.id'] === child.runId);
+    const children = records.filter(r => r['agent.openclaw.run_id'] === child.runId);
     expect(children.length).toBeGreaterThan(0);
+    expect(new Set(children.map(r => r['gen_ai.turn.id'])).size).toBe(1);
     expect(spawn.span_id).toMatch(/^[0-9a-f]{16}$/);
     expect(children.every(r => r.trace_id === spawn.trace_id)).toBe(true);
     expect(children.every(r => r.parent_span_id === spawn.span_id)).toBe(true);
@@ -1877,8 +1883,8 @@ it('keeps simultaneous spawns separate and recovers their identity after plugin 
   const calls = rows.filter(r => r['event.name'] === 'tool.call');
   expect(new Set(calls.map(r => r.span_id)).size).toBe(2);
   for (const i of [0, 1]) {
-    const call = calls.find(r => r['gen_ai.turn.id'] === `p${i}`);
-    const child = rows.filter(r => r['gen_ai.turn.id'] === `c${i}`);
+    const call = calls.find(r => r['agent.openclaw.run_id'] === `p${i}`);
+    const child = rows.filter(r => r['agent.openclaw.run_id'] === `c${i}`);
     expect(child.length).toBeGreaterThan(0);
     expect(child.every(r => r.trace_id === call.trace_id && r.parent_span_id === call.span_id && r['user.id'] === `user-${i}`)).toBe(true);
   }

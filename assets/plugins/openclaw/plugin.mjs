@@ -494,13 +494,24 @@ function observeSessionKey(run, event, ctx) {
   }
 }
 
-function getRun(runId, event, ctx) {
+function getRun(runId, event, ctx, newIfCompleted = false) {
   if (!runId) return null;
   let r = runs.get(runId);
+  if (newIfCompleted && r?.completed) {
+    // A native runId can be reused by a later invocation (for example, older
+    // session-bound cron jobs). Retire the completed incarnation only at a
+    // new-work boundary, so late terminal hooks still see the original run.
+    r.onEvict?.();
+    runs.delete(runId);
+    r = undefined;
+  }
   if (!r) {
     const savedParent = childContexts.read(runId);
     r = {
       runId,
+      // Native run IDs are not necessarily unique across invocations, even
+      // after the bounded run cache has evicted the previous incarnation.
+      turnId: crypto.randomUUID(),
       traceId: generateTraceId(),
       parentContext: savedParent?.auditOnly ? undefined : savedParent,
       auditParentContext: savedParent,
@@ -694,11 +705,11 @@ function buildCommonFields(run, sessionId, userId) {
   };
   if (run) {
     base.trace_id = run.traceId;
-    base["gen_ai.turn.id"] = run.turnId || run.runId;
+    base["gen_ai.turn.id"] = run.turnId;
     // The producer owns the start even if the collector restarts mid-run.
     // An explicit false keeps suffix responses from becoming a second start.
     base["gen_ai.turn.start"] = false;
-    if (run.turnId) base["agent.openclaw.run_id"] = run.runId;
+    base["agent.openclaw.run_id"] = run.runId;
     base["gen_ai.session.id"] = run.sessionId || sessionId || "";
     if (base["gen_ai.session.id"]) base["gen_ai.agent.id"] = base["gen_ai.session.id"];
     if (run.sessionKeyAmbiguous) base["agent.openclaw.session_key.ambiguous"] = true;
@@ -1076,7 +1087,7 @@ function handleBeforePromptBuild(event, ctx, userId, emit, cfg) {
 function handleBeforeAgentRun(event, ctx, userId, emit, cfg) {
   const runId = ctx?.runId || event?.runId;
   if (!runId) return;
-  const run = getRun(runId, event, ctx);
+  const run = getRun(runId, event, ctx, true);
   updateRunUserIdentity(run, event, ctx, cfg);
   if (event?.prompt) run.userPromptText = event.prompt;
   if (event?.systemPrompt) run.systemPrompt = event.systemPrompt;
@@ -1846,6 +1857,7 @@ export default {
       legacyClock = createObservationClock();
       const handlers = createLegacyHandlers({
         nowNanos, buildCommonFields, advanceClockTo: value => legacyClock.advanceTo(value),
+        startRun: (runId, event, ctx) => getRun(runId, event, ctx, true),
         resolveContextRun, safeStringify, buildAssistantOutputMessagesFromOpenClawMessage,
         handleLlmInput, handleBeforeAgentRun, handleModelCallStarted,
         handleBeforeMessageWrite: (event, ctx, userId, emit) =>

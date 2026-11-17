@@ -75,6 +75,7 @@ const USER_IDENTITY_PASSTHROUGH_KEYS = [
   'user.email',
 ] as const;
 const OPENCLAW_COMPAT_PASSTHROUGH_KEYS = [
+  'agent.openclaw.run_id',
   'agent.openclaw.compatibility',
   'agent.openclaw.timing.inferred',
   'agent.openclaw.timing.source',
